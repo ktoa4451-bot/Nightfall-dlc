@@ -1,19 +1,18 @@
 
-name: Nightfall Client Build
+name: Nightfall ZIP to JAR
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
+  push:
+    paths:
+      - '**.zip'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Fabric Mod
     runs-on: ubuntu-latest
 
     steps:
@@ -25,18 +24,65 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
 
-      - name: Grant execute permission
-        run: chmod +x gradlew
+      - name: Find and extract ZIP
+        shell: bash
+        run: |
+          set -e
+          ZIP_FILE=$(find . -type f -name '*.zip' \
+            -not -path './.git/*' | head -n 1)
 
-      - name: Build Nightfall Client
-        run: ./gradlew --no-daemon build
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: ZIP file not found in repository."
+            exit 1
+          fi
+
+          echo "Extracting: $ZIP_FILE"
+          mkdir -p extracted
+          unzip -o "$ZIP_FILE" -d extracted
+
+          echo "Extracted files:"
+          find extracted -maxdepth 4 -type f | head -n 100
+
+      - name: Locate Gradle project
+        shell: bash
+        run: |
+          set -e
+          BUILD_FILE=$(find extracted -type f \
+            \( -name build.gradle -o -name build.gradle.kts \) \
+            | head -n 1)
+
+          if [ -z "$BUILD_FILE" ]; then
+            echo "ERROR: No build.gradle or build.gradle.kts found in ZIP."
+            echo "The ZIP may contain source files without build configuration."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$BUILD_FILE")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Gradle project: $PROJECT_DIR"
+
+      - name: Build JAR
+        shell: bash
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon build
+          elif [ -f ./gradlew.bat ]; then
+            echo "Windows Gradle wrapper cannot run directly on Linux."
+            exit 1
+          else
+            echo "No Gradle wrapper found."
+            exit 1
+          fi
 
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
-          name: Nightfall-Client-1.21.11
-          path: build/libs/*.jar
+          name: Nightfall-Client-JAR
+          path: extracted/**/build/libs/*.jar
           if-no-files-found: error
           
